@@ -1,16 +1,20 @@
 """Tune Grabber - paste a YouTube link, preview the video, save the audio as MP3.
 
 Run:  python3 app.py   then open http://localhost:8765
+Your iPhone can use it too: open the "iPhone" address it prints (same Wi-Fi).
 """
 
+import io
 import os
 import platform
 import shutil
+import socket
 import threading
 import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
+import segno
 import yt_dlp
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,7 +26,9 @@ APPLE_MUSIC_AUTO_ADD = (
     Path.home() / "Music" / "Music" / "Media.localized" / "Automatically Add to Music.localized"
 )
 
-app = Flask(__name__, static_folder=None)
+PORT = int(os.environ.get("PORT", 8765))
+
+app = Flask(__name__, static_folder=str(BASE_DIR / "static"), static_url_path="/static")
 jobs = {}
 jobs_lock = threading.Lock()
 
@@ -37,6 +43,17 @@ def apple_music_folder():
         if candidate.is_dir():
             return candidate
     return None
+
+
+def lan_url():
+    """Address other devices on the same Wi-Fi (e.g. your iPhone) can use."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # no packet is sent; just picks the Wi-Fi interface
+            ip = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if ip.startswith("127.") else f"http://{ip}:{PORT}"
 
 
 def update_job(job_id, **fields):
@@ -109,7 +126,27 @@ def config():
     return jsonify(
         ffmpeg=bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
         apple_music=apple_music_folder() is not None,
+        lan_url=lan_url(),
     )
+
+
+@app.get("/api/phone-qr.svg")
+def phone_qr():
+    url = lan_url()
+    if not url:
+        return "", 404
+    buf = io.BytesIO()
+    segno.make(url, error="m").save(buf, kind="svg", scale=4, border=0)
+    return buf.getvalue(), 200, {"Content-Type": "image/svg+xml"}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return jsonify(
+        name="Tune Grabber", short_name="Tune Grabber", start_url="/", display="standalone",
+        background_color="#0e0f13", theme_color="#0e0f13",
+        icons=[{"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}],
+    ), 200, {"Content-Type": "application/manifest+json"}
 
 
 @app.post("/api/info")
@@ -173,6 +210,11 @@ def file(job_id):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8765))
-    print(f"\n  Tune Grabber is running -> open http://localhost:{port}\n")
-    app.run(host="127.0.0.1", port=port, debug=False)
+    phone = lan_url()
+    print(f"\n  Tune Grabber is running!")
+    print(f"    On this computer:  http://localhost:{PORT}")
+    if phone:
+        print(f"    On your iPhone:    {phone}   (same Wi-Fi, open in Safari)")
+    print()
+    # 0.0.0.0 so phones on your Wi-Fi can reach it; set HOST=127.0.0.1 to keep it computer-only.
+    app.run(host=os.environ.get("HOST", "0.0.0.0"), port=PORT, debug=False)

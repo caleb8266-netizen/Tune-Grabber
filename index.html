@@ -2,56 +2,96 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tune Grabber" />
+  <meta name="theme-color" content="#0e0f13" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <title>Tune Grabber</title>
   <style>
     :root {
       --bg: #0e0f13; --card: #181a21; --line: #2a2d37; --text: #f2f3f5;
       --muted: #9aa0ad; --accent: #ff3b5c; --accent-2: #ff7a45; --ok: #34c77b;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
       font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex; justify-content: center; padding: 40px 16px;
+      display: flex; justify-content: center;
+      /* keep clear of the notch / Dynamic Island and home indicator */
+      padding: calc(env(safe-area-inset-top) + 32px) calc(env(safe-area-inset-right) + 16px)
+               calc(env(safe-area-inset-bottom) + 32px) calc(env(safe-area-inset-left) + 16px);
     }
     main { width: 100%; max-width: 640px; }
     h1 { margin: 0 0 4px; font-size: 28px; }
     h1 span { background: linear-gradient(90deg, var(--accent), var(--accent-2));
       -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .sub { color: var(--muted); margin: 0 0 24px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; margin-bottom: 16px; }
     .row { display: flex; gap: 10px; }
-    input[type=text] {
-      flex: 1; min-width: 0; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line);
-      background: #0b0c10; color: var(--text); font-size: 16px; outline: none;
+    input[type=url] {
+      flex: 1; min-width: 0; min-height: 52px; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line);
+      background: #0b0c10; color: var(--text); font-size: 16px; /* 16px stops iOS zooming in */ outline: none;
+      -webkit-appearance: none; appearance: none;
     }
-    input[type=text]:focus { border-color: var(--accent); }
-    button {
-      border: 0; border-radius: 12px; padding: 14px 20px; font-size: 16px; font-weight: 600;
-      cursor: pointer; color: #fff; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    input[type=url]:focus { border-color: var(--accent); }
+    button, .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      min-height: 52px; border: 0; border-radius: 14px; padding: 12px 20px; font-size: 17px; font-weight: 600;
+      cursor: pointer; color: #fff; text-decoration: none; touch-action: manipulation;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
     }
+    button:active, .btn:active { transform: scale(.98); }
     button:disabled { opacity: .5; cursor: default; }
-    button.secondary { background: #262935; }
+    .secondary { background: #262935; }
     .player { position: relative; padding-top: 56.25%; border-radius: 12px; overflow: hidden; background: #000; }
     .player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
     .meta { margin: 14px 0 0; }
-    .meta h2 { font-size: 18px; margin: 0 0 4px; }
+    .meta h2 { font-size: 18px; margin: 0 0 4px; overflow-wrap: anywhere; }
     .meta p { margin: 0; color: var(--muted); font-size: 14px; }
-    .options { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 18px 0; color: var(--muted); font-size: 14px; }
-    select { background: #0b0c10; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 14px; }
+    .options { display: flex; flex-direction: column; gap: 14px; margin: 18px 0; font-size: 15px; }
+    .options label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    select {
+      min-height: 44px; background: #0b0c10; color: var(--text); border: 1px solid var(--line);
+      border-radius: 10px; padding: 8px 10px; font-size: 16px;
+    }
+    .switch { -webkit-appearance: none; appearance: none; flex: none; width: 51px; height: 31px; border-radius: 99px;
+      background: #3a3d48; position: relative; cursor: pointer; transition: background .2s; margin: 0; }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px;
+      border-radius: 50%; background: #fff; transition: transform .2s; }
+    .switch:checked { background: var(--ok); }
+    .switch:checked::after { transform: translateX(20px); }
+    .hint { color: var(--muted); font-size: 13px; }
     .bar { height: 10px; background: #0b0c10; border-radius: 99px; overflow: hidden; margin-top: 14px; }
     .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .3s; }
     .stage { color: var(--muted); font-size: 14px; margin-top: 8px; }
-    .msg { padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-top: 12px; }
+    .msg { padding: 12px 14px; border-radius: 12px; font-size: 15px; margin-top: 12px; overflow-wrap: anywhere; }
     .msg.err { background: #3a1520; color: #ffb3c0; }
     .msg.ok { background: #13301f; color: #9ff0c2; }
     .msg.warn { background: #3a2e12; color: #ffe08a; margin: 0 0 16px; }
     .hidden { display: none !important; }
-    details { color: var(--muted); font-size: 14px; }
-    details summary { cursor: pointer; color: var(--text); font-weight: 600; }
-    details li { margin: 6px 0; }
+    details { color: var(--muted); font-size: 15px; }
+    details summary { cursor: pointer; color: var(--text); font-weight: 600; min-height: 32px; }
+    details li { margin: 8px 0; }
+    .phone { display: flex; gap: 18px; align-items: center; }
+    .phone .qr { flex: none; background: #fff; border-radius: 12px; padding: 8px; line-height: 0; }
+    .phone .qr img { width: 132px; height: 132px; }
+    .phone b { color: var(--text); }
+    .phone code { color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
     .fine { color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px; }
+
+    /* phones: stack everything and make buttons full width */
+    @media (max-width: 560px) {
+      h1 { font-size: 26px; }
+      .row { flex-direction: column; }
+      .row > * { width: 100%; }
+      .phone { flex-direction: column; text-align: center; }
+    }
   </style>
 </head>
 <body>
@@ -60,19 +100,21 @@
   <p class="sub">Paste a YouTube link, preview the video, and save the sound as an MP3.</p>
 
   <div id="setupWarn" class="msg warn hidden">
-    FFmpeg isn't installed, so MP3 conversion won't work yet. See the README for the one-line install.
+    FFmpeg isn't installed on the computer running Tune Grabber, so MP3 conversion won't work yet. See the README for the one-line install.
   </div>
 
   <div class="card">
     <form id="lookupForm" class="row">
-      <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" />
+      <input id="url" type="url" inputmode="url" enterkeyhint="go" autocomplete="off" autocorrect="off"
+             autocapitalize="off" spellcheck="false" placeholder="Paste a YouTube link" aria-label="YouTube link" />
+      <button id="pasteBtn" type="button" class="secondary hidden">📋 Paste</button>
       <button id="lookupBtn" type="submit">Preview</button>
     </form>
     <div id="lookupErr" class="msg err hidden"></div>
   </div>
 
   <div id="previewCard" class="card hidden">
-    <div class="player"><iframe id="player" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+    <div class="player"><iframe id="player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>
     <div class="meta">
       <h2 id="title"></h2>
       <p id="details"></p>
@@ -81,13 +123,16 @@
     <div class="options">
       <label>Quality
         <select id="bitrate">
-          <option value="128">128 kbps (smaller)</option>
-          <option value="192" selected>192 kbps (standard)</option>
-          <option value="256">256 kbps (Apple Music quality)</option>
-          <option value="320">320 kbps (best)</option>
+          <option value="128">128 kbps · smaller</option>
+          <option value="192">192 kbps · standard</option>
+          <option value="256" selected>256 kbps · Apple Music</option>
+          <option value="320">320 kbps · best</option>
         </select>
       </label>
-      <label id="musicOpt" class="hidden"><input id="addToMusic" type="checkbox" checked /> Add to Apple Music automatically</label>
+      <div id="musicOpt" class="hidden">
+        <label>Add to Apple Music <input id="addToMusic" class="switch" type="checkbox" checked /></label>
+        <div class="hint">Goes into the Music library on your computer, then syncs to your iPhone.</div>
+      </div>
     </div>
 
     <div class="row">
@@ -100,8 +145,23 @@
     </div>
     <div id="convertMsg" class="msg hidden"></div>
     <div id="downloadRow" class="row hidden" style="margin-top:12px">
-      <a id="downloadLink"><button type="button">⬇ Download MP3</button></a>
+      <a id="downloadLink" class="btn">⬇ Save MP3</a>
       <button id="againBtn" type="button" class="secondary">Convert another</button>
+    </div>
+    <div id="iosSaveHint" class="hint hidden" style="margin-top:10px">
+      On iPhone, tap <b>Download</b> when Safari asks. The MP3 lands in the <b>Files</b> app → Downloads.
+    </div>
+  </div>
+
+  <div id="phoneCard" class="card hidden">
+    <div class="phone">
+      <div class="qr"><img id="qr" alt="QR code to open Tune Grabber on your phone" /></div>
+      <div>
+        <b>📱 Use it on your iPhone</b>
+        <p class="hint" style="margin:6px 0">Scan with your iPhone camera (same Wi‑Fi), or open this in Safari:</p>
+        <code id="lanUrl"></code>
+        <p class="hint" style="margin:6px 0 0">Then tap Share → <b>Add to Home Screen</b> to get an app icon.</p>
+      </div>
     </div>
   </div>
 
@@ -109,9 +169,9 @@
     <details>
       <summary>How do I get it into Apple Music?</summary>
       <ul>
-        <li><b>On a Mac:</b> keep “Add to Apple Music automatically” checked and it shows up in your library by itself. Or drag the downloaded MP3 into the Music app.</li>
-        <li><b>On Windows:</b> open iTunes → File → Add File to Library… and pick the MP3.</li>
-        <li><b>Get it on your iPhone:</b> turn on <i>Sync Library</i> (Settings → Music on iPhone, Music → Settings → General on Mac) and it syncs over, or plug your phone in and sync it from Finder/iTunes.</li>
+        <li><b>Easiest (from iPhone or computer):</b> leave <i>Add to Apple Music</i> on. The song goes into the Music library on your Mac, and with <i>Sync Library</i> turned on (Settings → Apps → Music on iPhone, Music → Settings → General on Mac) it shows up on your iPhone.</li>
+        <li><b>Saved to your iPhone:</b> tap <i>Save MP3</i>. It goes to Files → Downloads, where you can play it. iPhones can't import MP3s into the Music app by themselves.</li>
+        <li><b>On Windows:</b> open iTunes → File → Add File to Library… and pick the MP3, then sync your iPhone.</li>
       </ul>
     </details>
   </div>
@@ -121,6 +181,9 @@
 
 <script>
   const $ = (id) => document.getElementById(id);
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
   let currentUrl = "";
   let pollTimer = null;
 
@@ -130,6 +193,7 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
     return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
   }
+  function looksLikeLink(text) { return /^https?:\/\/\S+$/i.test(text.trim()); }
   async function api(path, body) {
     const res = await fetch(path, body ? {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
@@ -142,11 +206,35 @@
   api("/api/config").then((cfg) => {
     show($("setupWarn"), !cfg.ffmpeg);
     show($("musicOpt"), cfg.apple_music);
+    // On the computer itself, show how to open it on the phone.
+    if (isLocal && !isIOS && cfg.lan_url) {
+      $("lanUrl").textContent = cfg.lan_url;
+      $("qr").src = "/api/phone-qr.svg";
+      $("qr").onerror = () => $("qr").parentElement.remove();
+      show($("phoneCard"));
+    }
   }).catch(() => {});
+
+  // Clipboard reading only works on the computer (http://localhost); on iPhone use long-press → Paste.
+  if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext) {
+    show($("pasteBtn"));
+    $("pasteBtn").addEventListener("click", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) { $("url").value = text.trim(); $("lookupForm").requestSubmit(); }
+      } catch { $("url").focus(); }
+    });
+  }
+
+  // Pasting a link previews it straight away.
+  $("url").addEventListener("paste", () => setTimeout(() => {
+    if (looksLikeLink($("url").value)) $("lookupForm").requestSubmit();
+  }, 0));
 
   function resetConvert() {
     clearInterval(pollTimer);
-    show($("progressWrap"), false); show($("convertMsg"), false); show($("downloadRow"), false);
+    show($("progressWrap"), false); show($("convertMsg"), false);
+    show($("downloadRow"), false); show($("iosSaveHint"), false);
     $("bar").style.width = "0"; $("convertBtn").disabled = false; show($("convertBtn"), true);
   }
 
@@ -154,17 +242,20 @@
     e.preventDefault();
     const url = $("url").value.trim();
     if (!url) return;
+    $("url").blur(); // hide the iPhone keyboard
     show($("lookupErr"), false);
     $("lookupBtn").disabled = true; $("lookupBtn").textContent = "Loading…";
     try {
       const info = await api("/api/info", { url });
       currentUrl = url;
-      $("player").src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(info.id)}`;
+      // playsinline keeps the video in the page on iPhone instead of jumping to full screen
+      $("player").src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(info.id)}?playsinline=1&rel=0`;
       $("title").textContent = info.title || "Untitled";
       $("details").textContent = [info.channel, fmtTime(info.duration),
         info.views ? `${info.views.toLocaleString()} views` : ""].filter(Boolean).join(" • ");
       resetConvert();
       show($("previewCard"));
+      $("previewCard").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
       $("lookupErr").textContent = err.message; show($("lookupErr"));
     } finally {
@@ -193,7 +284,8 @@
           $("downloadLink").href = `/api/file/${job_id}`;
           $("convertMsg").className = "msg ok";
           $("convertMsg").textContent = `✅ ${job.filename} is ready.` + (job.music_note ? ` ${job.music_note}` : "");
-          show($("convertMsg")); show($("downloadRow"));
+          show($("convertMsg")); show($("downloadRow")); show($("iosSaveHint"), isIOS);
+          if (navigator.vibrate) navigator.vibrate(30);
         } else if (job.status === "error") {
           clearInterval(pollTimer);
           $("convertMsg").className = "msg err";
@@ -210,7 +302,12 @@
   $("againBtn").addEventListener("click", () => {
     resetConvert(); show($("previewCard"), false);
     $("player").src = ""; $("url").value = ""; $("url").focus();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
+
+  // Opened as .../?url=<link> (e.g. from an iPhone Shortcut on the YouTube share sheet): preview it right away.
+  const shared = new URLSearchParams(location.search).get("url");
+  if (shared) { $("url").value = shared; $("lookupForm").requestSubmit(); }
 </script>
 </body>
 </html>
