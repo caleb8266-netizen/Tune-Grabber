@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tune Grabber</title>
+  <style>
+    :root {
+      --bg: #0e0f13; --card: #181a21; --line: #2a2d37; --text: #f2f3f5;
+      --muted: #9aa0ad; --accent: #ff3b5c; --accent-2: #ff7a45; --ok: #34c77b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex; justify-content: center; padding: 40px 16px;
+    }
+    main { width: 100%; max-width: 640px; }
+    h1 { margin: 0 0 4px; font-size: 28px; }
+    h1 span { background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
+    .row { display: flex; gap: 10px; }
+    input[type=text] {
+      flex: 1; min-width: 0; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line);
+      background: #0b0c10; color: var(--text); font-size: 16px; outline: none;
+    }
+    input[type=text]:focus { border-color: var(--accent); }
+    button {
+      border: 0; border-radius: 12px; padding: 14px 20px; font-size: 16px; font-weight: 600;
+      cursor: pointer; color: #fff; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    button.secondary { background: #262935; }
+    .player { position: relative; padding-top: 56.25%; border-radius: 12px; overflow: hidden; background: #000; }
+    .player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .meta { margin: 14px 0 0; }
+    .meta h2 { font-size: 18px; margin: 0 0 4px; }
+    .meta p { margin: 0; color: var(--muted); font-size: 14px; }
+    .options { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 18px 0; color: var(--muted); font-size: 14px; }
+    select { background: #0b0c10; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 14px; }
+    .bar { height: 10px; background: #0b0c10; border-radius: 99px; overflow: hidden; margin-top: 14px; }
+    .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .3s; }
+    .stage { color: var(--muted); font-size: 14px; margin-top: 8px; }
+    .msg { padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-top: 12px; }
+    .msg.err { background: #3a1520; color: #ffb3c0; }
+    .msg.ok { background: #13301f; color: #9ff0c2; }
+    .msg.warn { background: #3a2e12; color: #ffe08a; margin: 0 0 16px; }
+    .hidden { display: none !important; }
+    details { color: var(--muted); font-size: 14px; }
+    details summary { cursor: pointer; color: var(--text); font-weight: 600; }
+    details li { margin: 6px 0; }
+    .fine { color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🎵 <span>Tune Grabber</span></h1>
+  <p class="sub">Paste a YouTube link, preview the video, and save the sound as an MP3.</p>
+
+  <div id="setupWarn" class="msg warn hidden">
+    FFmpeg isn't installed, so MP3 conversion won't work yet. See the README for the one-line install.
+  </div>
+
+  <div class="card">
+    <form id="lookupForm" class="row">
+      <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" />
+      <button id="lookupBtn" type="submit">Preview</button>
+    </form>
+    <div id="lookupErr" class="msg err hidden"></div>
+  </div>
+
+  <div id="previewCard" class="card hidden">
+    <div class="player"><iframe id="player" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+    <div class="meta">
+      <h2 id="title"></h2>
+      <p id="details"></p>
+    </div>
+
+    <div class="options">
+      <label>Quality
+        <select id="bitrate">
+          <option value="128">128 kbps (smaller)</option>
+          <option value="192" selected>192 kbps (standard)</option>
+          <option value="256">256 kbps (Apple Music quality)</option>
+          <option value="320">320 kbps (best)</option>
+        </select>
+      </label>
+      <label id="musicOpt" class="hidden"><input id="addToMusic" type="checkbox" checked /> Add to Apple Music automatically</label>
+    </div>
+
+    <div class="row">
+      <button id="convertBtn" type="button">Convert to MP3</button>
+    </div>
+
+    <div id="progressWrap" class="hidden">
+      <div class="bar"><div id="bar"></div></div>
+      <div id="stage" class="stage"></div>
+    </div>
+    <div id="convertMsg" class="msg hidden"></div>
+    <div id="downloadRow" class="row hidden" style="margin-top:12px">
+      <a id="downloadLink"><button type="button">⬇ Download MP3</button></a>
+      <button id="againBtn" type="button" class="secondary">Convert another</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>How do I get it into Apple Music?</summary>
+      <ul>
+        <li><b>On a Mac:</b> keep “Add to Apple Music automatically” checked and it shows up in your library by itself. Or drag the downloaded MP3 into the Music app.</li>
+        <li><b>On Windows:</b> open iTunes → File → Add File to Library… and pick the MP3.</li>
+        <li><b>Get it on your iPhone:</b> turn on <i>Sync Library</i> (Settings → Music on iPhone, Music → Settings → General on Mac) and it syncs over, or plug your phone in and sync it from Finder/iTunes.</li>
+      </ul>
+    </details>
+  </div>
+
+  <p class="fine">Use this for your own videos, royalty‑free music, or content you have permission to download.</p>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let currentUrl = "";
+  let pollTimer = null;
+
+  function show(el, on = true) { el.classList.toggle("hidden", !on); }
+  function fmtTime(s) {
+    if (!s) return "";
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+  }
+  async function api(path, body) {
+    const res = await fetch(path, body ? {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    } : undefined);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Something went wrong.");
+    return data;
+  }
+
+  api("/api/config").then((cfg) => {
+    show($("setupWarn"), !cfg.ffmpeg);
+    show($("musicOpt"), cfg.apple_music);
+  }).catch(() => {});
+
+  function resetConvert() {
+    clearInterval(pollTimer);
+    show($("progressWrap"), false); show($("convertMsg"), false); show($("downloadRow"), false);
+    $("bar").style.width = "0"; $("convertBtn").disabled = false; show($("convertBtn"), true);
+  }
+
+  $("lookupForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = $("url").value.trim();
+    if (!url) return;
+    show($("lookupErr"), false);
+    $("lookupBtn").disabled = true; $("lookupBtn").textContent = "Loading…";
+    try {
+      const info = await api("/api/info", { url });
+      currentUrl = url;
+      $("player").src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(info.id)}`;
+      $("title").textContent = info.title || "Untitled";
+      $("details").textContent = [info.channel, fmtTime(info.duration),
+        info.views ? `${info.views.toLocaleString()} views` : ""].filter(Boolean).join(" • ");
+      resetConvert();
+      show($("previewCard"));
+    } catch (err) {
+      $("lookupErr").textContent = err.message; show($("lookupErr"));
+    } finally {
+      $("lookupBtn").disabled = false; $("lookupBtn").textContent = "Preview";
+    }
+  });
+
+  $("convertBtn").addEventListener("click", async () => {
+    resetConvert();
+    $("convertBtn").disabled = true;
+    show($("progressWrap")); $("stage").textContent = "Starting…";
+    try {
+      const { job_id } = await api("/api/convert", {
+        url: currentUrl,
+        bitrate: Number($("bitrate").value),
+        add_to_music: !$("musicOpt").classList.contains("hidden") && $("addToMusic").checked,
+      });
+      pollTimer = setInterval(async () => {
+        let job;
+        try { job = await api(`/api/status/${job_id}`); } catch { return; }
+        $("bar").style.width = `${job.progress || 0}%`;
+        $("stage").textContent = job.stage;
+        if (job.status === "done") {
+          clearInterval(pollTimer);
+          show($("convertBtn"), false);
+          $("downloadLink").href = `/api/file/${job_id}`;
+          $("convertMsg").className = "msg ok";
+          $("convertMsg").textContent = `✅ ${job.filename} is ready.` + (job.music_note ? ` ${job.music_note}` : "");
+          show($("convertMsg")); show($("downloadRow"));
+        } else if (job.status === "error") {
+          clearInterval(pollTimer);
+          $("convertMsg").className = "msg err";
+          $("convertMsg").textContent = job.error;
+          show($("convertMsg")); $("convertBtn").disabled = false;
+        }
+      }, 700);
+    } catch (err) {
+      $("convertMsg").className = "msg err"; $("convertMsg").textContent = err.message;
+      show($("convertMsg")); $("convertBtn").disabled = false;
+    }
+  });
+
+  $("againBtn").addEventListener("click", () => {
+    resetConvert(); show($("previewCard"), false);
+    $("player").src = ""; $("url").value = ""; $("url").focus();
+  });
+</script>
+</body>
+</html>
