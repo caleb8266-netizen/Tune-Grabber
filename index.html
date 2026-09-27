@@ -83,6 +83,27 @@
     .phone .qr img { width: 132px; height: 132px; }
     .phone b { color: var(--text); }
     .phone code { color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
+    .result { display: flex; gap: 16px; align-items: center; margin-top: 14px; padding: 14px;
+      border-radius: 16px; background: #13301f; }
+    .result img { flex: none; width: 112px; height: 112px; object-fit: cover; border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.45); background: #0b0c10; }
+    .result img.wide { width: 168px; height: 94.5px; }
+    .result .t { font-weight: 700; font-size: 17px; overflow-wrap: anywhere; }
+    .result .c { color: var(--muted); font-size: 14px; }
+    .result .ok { color: #9ff0c2; font-size: 14px; margin-top: 6px; }
+    .lib-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 14px; }
+    .lib-head h2 { font-size: 18px; margin: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+    .tile { display: block; color: var(--text); text-decoration: none; min-width: 0; }
+    .tile .art { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #0b0c10; }
+    .tile .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tile .art .noart { position: absolute; inset: 0; display: grid; place-items: center; font-size: 40px; }
+    .tile .art .dl { position: absolute; right: 8px; bottom: 8px; width: 34px; height: 34px; border-radius: 50%;
+      display: grid; place-items: center; font-size: 16px; color: #fff;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+    .tile .name { font-size: 14px; font-weight: 600; margin-top: 8px; line-height: 1.3;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .tile .by { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .fine { color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px; }
 
     /* phones: stack everything and make buttons full width */
@@ -91,6 +112,9 @@
       .row { flex-direction: column; }
       .row > * { width: 100%; }
       .phone { flex-direction: column; text-align: center; }
+      .result img { width: 96px; height: 96px; }
+      .result img.wide { width: 128px; height: 72px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -129,6 +153,10 @@
           <option value="320">320 kbps · best</option>
         </select>
       </label>
+      <div>
+        <label>Square cover art <input id="squareCover" class="switch" type="checkbox" checked /></label>
+        <div class="hint">Crops the video thumbnail to a square, like an album cover. Turn off to keep the full widescreen picture.</div>
+      </div>
       <div id="musicOpt" class="hidden">
         <label>Add to Apple Music <input id="addToMusic" class="switch" type="checkbox" checked /></label>
         <div class="hint">Goes into the Music library on your computer, then syncs to your iPhone.</div>
@@ -144,6 +172,14 @@
       <div id="stage" class="stage"></div>
     </div>
     <div id="convertMsg" class="msg hidden"></div>
+    <div id="result" class="result hidden">
+      <img id="resultArt" alt="Cover art" />
+      <div>
+        <div id="resultTitle" class="t"></div>
+        <div id="resultBy" class="c"></div>
+        <div id="resultNote" class="ok"></div>
+      </div>
+    </div>
     <div id="downloadRow" class="row hidden" style="margin-top:12px">
       <a id="downloadLink" class="btn">⬇ Save MP3</a>
       <button id="againBtn" type="button" class="secondary">Convert another</button>
@@ -151,6 +187,11 @@
     <div id="iosSaveHint" class="hint hidden" style="margin-top:10px">
       On iPhone, tap <b>Download</b> when Safari asks. The MP3 lands in the <b>Files</b> app → Downloads.
     </div>
+  </div>
+
+  <div id="libraryCard" class="card hidden">
+    <div class="lib-head"><h2>🎧 Your downloads</h2><span id="libCount" class="hint"></span></div>
+    <div id="grid" class="grid"></div>
   </div>
 
   <div id="phoneCard" class="card hidden">
@@ -231,10 +272,31 @@
     if (looksLikeLink($("url").value)) $("lookupForm").requestSubmit();
   }, 0));
 
+  function artImg(track) {
+    if (!track.cover) return '<div class="noart">🎵</div>';
+    return `<img src="${track.cover}" alt="" loading="lazy" />`;
+  }
+  function esc(text) {
+    return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  async function loadLibrary() {
+    let tracks;
+    try { ({ tracks } = await api("/api/library")); } catch { return; }
+    show($("libraryCard"), tracks.length > 0);
+    $("libCount").textContent = `${tracks.length} song${tracks.length === 1 ? "" : "s"}`;
+    $("grid").innerHTML = tracks.map((t) => `
+      <a class="tile" href="/api/file/${t.id}" title="Save ${esc(t.filename)}">
+        <div class="art">${artImg(t)}<span class="dl">⬇</span></div>
+        <div class="name">${esc(t.title)}</div>
+        <div class="by">${esc([t.channel, fmtTime(t.duration)].filter(Boolean).join(" • "))}</div>
+      </a>`).join("");
+  }
+  loadLibrary();
+
   function resetConvert() {
     clearInterval(pollTimer);
     show($("progressWrap"), false); show($("convertMsg"), false);
-    show($("downloadRow"), false); show($("iosSaveHint"), false);
+    show($("downloadRow"), false); show($("iosSaveHint"), false); show($("result"), false);
     $("bar").style.width = "0"; $("convertBtn").disabled = false; show($("convertBtn"), true);
   }
 
@@ -272,6 +334,7 @@
         url: currentUrl,
         bitrate: Number($("bitrate").value),
         add_to_music: !$("musicOpt").classList.contains("hidden") && $("addToMusic").checked,
+        square_cover: $("squareCover").checked,
       });
       pollTimer = setInterval(async () => {
         let job;
@@ -282,9 +345,16 @@
           clearInterval(pollTimer);
           show($("convertBtn"), false);
           $("downloadLink").href = `/api/file/${job_id}`;
-          $("convertMsg").className = "msg ok";
-          $("convertMsg").textContent = `✅ ${job.filename} is ready.` + (job.music_note ? ` ${job.music_note}` : "");
-          show($("convertMsg")); show($("downloadRow")); show($("iosSaveHint"), isIOS);
+          const t = job.track || { title: job.filename };
+          const art = $("resultArt");
+          show(art, !!t.cover);
+          art.classList.toggle("wide", !$("squareCover").checked);
+          if (t.cover) art.src = `${t.cover}?v=${job_id}`;
+          $("resultTitle").textContent = t.title;
+          $("resultBy").textContent = t.channel || "";
+          $("resultNote").textContent = "✅ MP3 ready, with this cover art built in." + (job.music_note ? ` ${job.music_note}` : "");
+          show($("result")); show($("downloadRow")); show($("iosSaveHint"), isIOS);
+          loadLibrary();
           if (navigator.vibrate) navigator.vibrate(30);
         } else if (job.status === "error") {
           clearInterval(pollTimer);

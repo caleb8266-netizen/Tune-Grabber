@@ -5,7 +5,10 @@ Your iPhone can use it too: open the "iPhone" address it prints (same Wi-Fi).
 """
 
 import io
+import json
 import os
+import re
+import time
 import platform
 import shutil
 import socket
@@ -61,7 +64,38 @@ def update_job(job_id, **fields):
         jobs[job_id].update(fields)
 
 
-def run_conversion(job_id, url, bitrate, add_to_music):
+# ffmpeg filter that trims a widescreen thumbnail to a centered square, like album art.
+SQUARE_CROP = "crop='if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'"
+
+
+def job_dir_for(job_id):
+    """Folder for a job, or None if the id isn't one we could have made (blocks ../ tricks)."""
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id or ""):
+        return None
+    folder = DOWNLOAD_DIR / job_id
+    return folder if folder.is_dir() else None
+
+
+def load_track(job_dir):
+    """Details of a finished download, read from disk so they survive restarts."""
+    try:
+        meta = json.loads((job_dir / "track.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not (job_dir / meta.get("filename", "")).is_file():
+        return None
+    return {
+        "id": job_dir.name,
+        "title": meta.get("title"),
+        "channel": meta.get("channel"),
+        "duration": meta.get("duration"),
+        "filename": meta["filename"],
+        "created": meta.get("created"),
+        "cover": f"/api/cover/{job_dir.name}" if (job_dir / "cover.jpg").is_file() else None,
+    }
+
+
+def run_conversion(job_id, url, bitrate, add_to_music, square_cover):
     job_dir = DOWNLOAD_DIR / job_id
     job_dir.mkdir(exist_ok=True)
 
@@ -80,24 +114,39 @@ def run_conversion(job_id, url, bitrate, add_to_music):
         "writethumbnail": True,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "progress_hooks": [on_progress],
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": str(bitrate)},
             # Cover art + title/artist tags so it looks right in Apple Music.
             {"key": "FFmpegThumbnailsConvertor", "format": "jpg"},
-            {"key": "EmbedThumbnail"},
+            # already_have_thumbnail keeps the .jpg after embedding so the app can show it.
+            {"key": "EmbedThumbnail", "already_have_thumbnail": True},
             {"key": "FFmpegMetadata", "add_metadata": True},
         ],
     }
+    if square_cover:
+        opts["postprocessor_args"] = {"thumbnailsconvertor+ffmpeg_o": ["-vf", SQUARE_CROP]}
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.extract_info(url, download=True)
+            meta = ydl.extract_info(url, download=True)
 
         mp3s = list(job_dir.glob("*.mp3"))
         if not mp3s:
             raise RuntimeError("Conversion finished but no MP3 was produced.")
         mp3 = mp3s[0]
+
+        jpgs = list(job_dir.glob("*.jpg"))
+        if jpgs:
+            jpgs[0].replace(job_dir / "cover.jpg")
+        (job_dir / "track.json").write_text(json.dumps({
+            "title": meta.get("title") or mp3.stem,
+            "channel": meta.get("uploader") or meta.get("channel"),
+            "duration": meta.get("duration"),
+            "filename": mp3.name,
+            "created": time.time(),
+        }))
 
         music_note = None
         if add_to_music:
@@ -110,7 +159,7 @@ def run_conversion(job_id, url, bitrate, add_to_music):
 
         update_job(
             job_id, status="done", stage="Done", progress=100,
-            filename=mp3.name, music_note=music_note,
+            filename=mp3.name, music_note=music_note, track=load_track(job_dir),
         )
     except Exception as exc:  # surface yt-dlp/ffmpeg errors to the page
         update_job(job_id, status="error", stage="Error", error=str(exc))
@@ -184,7 +233,7 @@ def convert():
         jobs[job_id] = {"status": "working", "stage": "Starting", "progress": 0}
     threading.Thread(
         target=run_conversion,
-        args=(job_id, url, bitrate, bool(body.get("add_to_music"))),
+        args=(job_id, url, bitrate, bool(body.get("add_to_music")), body.get("square_cover", True) is not False),
         daemon=True,
     ).start()
     return jsonify(job_id=job_id)
@@ -201,12 +250,27 @@ def status(job_id):
 
 @app.get("/api/file/<job_id>")
 def file(job_id):
-    with jobs_lock:
-        job = jobs.get(job_id)
-    if not job or job.get("status") != "done":
+    folder = job_dir_for(job_id)
+    track = load_track(folder) if folder else None
+    if not track:
         return jsonify(error="File not ready"), 404
-    return send_file(DOWNLOAD_DIR / job_id / job["filename"], as_attachment=True,
-                     download_name=job["filename"], mimetype="audio/mpeg")
+    return send_file(folder / track["filename"], as_attachment=True,
+                     download_name=track["filename"], mimetype="audio/mpeg")
+
+
+@app.get("/api/cover/<job_id>")
+def cover(job_id):
+    folder = job_dir_for(job_id)
+    if not folder or not (folder / "cover.jpg").is_file():
+        return jsonify(error="No cover"), 404
+    return send_file(folder / "cover.jpg", mimetype="image/jpeg", max_age=86400)
+
+
+@app.get("/api/library")
+def library():
+    tracks = [t for d in DOWNLOAD_DIR.iterdir() if d.is_dir() for t in [load_track(d)] if t]
+    tracks.sort(key=lambda t: t["created"] or 0, reverse=True)
+    return jsonify(tracks=tracks)
 
 
 if __name__ == "__main__":

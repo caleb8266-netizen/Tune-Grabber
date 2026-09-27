@@ -53,7 +53,12 @@ If your iPhone can't connect: check both devices are on the same Wi‑Fi, and on
 
 1. Paste a YouTube link and click **Preview** – the video appears so you can check it's the right one.
 2. Pick a quality (256 kbps matches Apple Music).
-3. Click **Convert to MP3**, then **Download MP3**.
+3. Click **Convert to MP3**. When it's done you'll see the song's **cover art** (the video
+   thumbnail, built into the MP3 so Apple Music shows it too), then tap **Save MP3**.
+   *Square cover art* (on by default) crops the thumbnail to an album-style square; turn it
+   off to keep the full widescreen picture.
+4. Everything you've converted appears under **Your downloads** with its cover. Tap one to
+   save it again.
 
 ## Getting it into Apple Music
 
