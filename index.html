@@ -98,9 +98,15 @@
     .tile .art { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #0b0c10; }
     .tile .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .tile .art .noart { position: absolute; inset: 0; display: grid; place-items: center; font-size: 40px; }
-    .tile .art .dl { position: absolute; right: 8px; bottom: 8px; width: 34px; height: 34px; border-radius: 50%;
-      display: grid; place-items: center; font-size: 16px; color: #fff;
+    .tile .badges { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+    .tile .dl { width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%;
+      display: grid; place-items: center; font-size: 16px; color: #fff; text-decoration: none;
       background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+    .tile .dl.alt { background: #262935; }
+    .tile .dl.done, button.done { background: #1f7a4a; }
+    .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 24px); transform: translateX(-50%);
+      max-width: calc(100% - 32px); padding: 12px 18px; border-radius: 14px; background: #f2f3f5; color: #0e0f13;
+      font-size: 15px; font-weight: 600; box-shadow: 0 8px 30px rgba(0,0,0,.5); z-index: 10; }
     .tile .name { font-size: 14px; font-weight: 600; margin-top: 8px; line-height: 1.3;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .tile .by { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -181,8 +187,12 @@
       </div>
     </div>
     <div id="downloadRow" class="row hidden" style="margin-top:12px">
+      <button id="musicBtn" type="button" class="hidden">🎵 Add to Apple Music</button>
       <a id="downloadLink" class="btn">⬇ Save MP3</a>
       <button id="againBtn" type="button" class="secondary">Convert another</button>
+    </div>
+    <div id="musicHint" class="hint hidden" style="margin-top:10px">
+      Goes straight into the Music app on your Mac. Turn on <b>Sync Library</b> to get it on your iPhone too.
     </div>
     <div id="iosSaveHint" class="hint hidden" style="margin-top:10px">
       On iPhone, tap <b>Download</b> when Safari asks. The MP3 lands in the <b>Files</b> app → Downloads.
@@ -219,6 +229,7 @@
 
   <p class="fine">Use this for your own videos, royalty‑free music, or content you have permission to download.</p>
 </main>
+<div id="toast" class="toast hidden" role="status"></div>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -226,6 +237,9 @@
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
   let currentUrl = "";
+  let appleMusic = false;   // true when the Mac running Tune Grabber has a Music library
+  let currentJob = null;
+  let toastTimer = null;
   let pollTimer = null;
 
   function show(el, on = true) { el.classList.toggle("hidden", !on); }
@@ -246,7 +260,11 @@
 
   api("/api/config").then((cfg) => {
     show($("setupWarn"), !cfg.ffmpeg);
-    show($("musicOpt"), cfg.apple_music);
+    appleMusic = cfg.apple_music;
+    show($("musicOpt"), appleMusic);
+    $("downloadLink").textContent = appleMusic ? "⬇ Save MP3 file" : "⬇ Save MP3";
+    $("downloadLink").classList.toggle("secondary", appleMusic);
+    loadLibrary();
     // On the computer itself, show how to open it on the phone.
     if (isLocal && !isIOS && cfg.lan_url) {
       $("lanUrl").textContent = cfg.lan_url;
@@ -272,6 +290,36 @@
     if (looksLikeLink($("url").value)) $("lookupForm").requestSubmit();
   }, 0));
 
+  try {
+    if (localStorage.getItem("addToMusic") === "off") $("addToMusic").checked = false;
+  } catch {}
+  $("addToMusic").addEventListener("change", () => {
+    try { localStorage.setItem("addToMusic", $("addToMusic").checked ? "on" : "off"); } catch {}
+  });
+
+  function toast(text) {
+    clearTimeout(toastTimer);
+    $("toast").textContent = text; show($("toast"));
+    toastTimer = setTimeout(() => show($("toast"), false), 3500);
+  }
+  function setMusicBtn(inMusic) {
+    $("musicBtn").disabled = inMusic;
+    $("musicBtn").classList.toggle("done", inMusic);
+    $("musicBtn").textContent = inMusic ? "✓ In Apple Music" : "🎵 Add to Apple Music";
+  }
+  async function sendToMusic(id) {
+    try {
+      const res = await api(`/api/music/${id}`, {});
+      toast(`🎵 ${res.message}`);
+      if (id === currentJob) setMusicBtn(true);
+      loadLibrary();
+      return true;
+    } catch (err) {
+      toast(err.message);
+      return false;
+    }
+  }
+
   function artImg(track) {
     if (!track.cover) return '<div class="noart">🎵</div>';
     return `<img src="${track.cover}" alt="" loading="lazy" />`;
@@ -284,19 +332,36 @@
     try { ({ tracks } = await api("/api/library")); } catch { return; }
     show($("libraryCard"), tracks.length > 0);
     $("libCount").textContent = `${tracks.length} song${tracks.length === 1 ? "" : "s"}`;
-    $("grid").innerHTML = tracks.map((t) => `
-      <a class="tile" href="/api/file/${t.id}" title="Save ${esc(t.filename)}">
-        <div class="art">${artImg(t)}<span class="dl">⬇</span></div>
+    $("grid").innerHTML = tracks.map((t) => {
+      const music = !appleMusic ? "" : t.in_music
+        ? '<span class="dl done" title="In Apple Music">✓</span>'
+        : `<button type="button" class="dl" data-music="${t.id}" title="Add to Apple Music" aria-label="Add to Apple Music">🎵</button>`;
+      return `
+      <div class="tile">
+        <div class="art">${artImg(t)}
+          <div class="badges">${music}<a class="dl${appleMusic ? " alt" : ""}" href="/api/file/${t.id}"
+             title="Save MP3 file" aria-label="Save MP3 file">⬇</a></div>
+        </div>
         <div class="name">${esc(t.title)}</div>
         <div class="by">${esc([t.channel, fmtTime(t.duration)].filter(Boolean).join(" • "))}</div>
-      </a>`).join("");
+      </div>`;
+    }).join("");
   }
   loadLibrary();
+  $("grid").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-music]");
+    if (btn) { btn.disabled = true; sendToMusic(btn.dataset.music).then((ok) => { btn.disabled = !ok ? false : true; }); }
+  });
+
+  $("musicBtn").addEventListener("click", async () => {
+    $("musicBtn").disabled = true;
+    if (!(await sendToMusic(currentJob))) $("musicBtn").disabled = false;
+  });
 
   function resetConvert() {
     clearInterval(pollTimer);
     show($("progressWrap"), false); show($("convertMsg"), false);
-    show($("downloadRow"), false); show($("iosSaveHint"), false); show($("result"), false);
+    show($("downloadRow"), false); show($("iosSaveHint"), false); show($("result"), false); show($("musicHint"), false);
     $("bar").style.width = "0"; $("convertBtn").disabled = false; show($("convertBtn"), true);
   }
 
@@ -345,6 +410,7 @@
           clearInterval(pollTimer);
           show($("convertBtn"), false);
           $("downloadLink").href = `/api/file/${job_id}`;
+          currentJob = job_id;
           const t = job.track || { title: job.filename };
           const art = $("resultArt");
           show(art, !!t.cover);
@@ -353,7 +419,9 @@
           $("resultTitle").textContent = t.title;
           $("resultBy").textContent = t.channel || "";
           $("resultNote").textContent = "✅ MP3 ready, with this cover art built in." + (job.music_note ? ` ${job.music_note}` : "");
-          show($("result")); show($("downloadRow")); show($("iosSaveHint"), isIOS);
+          show($("musicBtn"), appleMusic); setMusicBtn(!!(job.track && job.track.in_music));
+          show($("result")); show($("downloadRow"));
+          show($("musicHint"), appleMusic); show($("iosSaveHint"), isIOS && !appleMusic);
           loadLibrary();
           if (navigator.vibrate) navigator.vibrate(30);
         } else if (job.status === "error") {

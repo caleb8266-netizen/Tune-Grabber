@@ -45,7 +45,32 @@ def apple_music_folder():
     ):
         if candidate.is_dir():
             return candidate
+    # Libraries in other spots (e.g. an old "iTunes" folder) keep it a level or two down.
+    music = Path.home() / "Music"
+    for pattern in ("*/*/Automatically Add to*", "*/Automatically Add to*"):
+        for candidate in music.glob(pattern):
+            if candidate.is_dir():
+                return candidate
     return None
+
+
+def send_to_music(job_dir):
+    """Copy a finished MP3 into the Music app's auto-import folder. Returns a message for the page."""
+    folder = apple_music_folder()
+    if not folder:
+        return False, "Couldn't find the Apple Music library on this Mac. Open the Music app once, then try again."
+    meta_path = job_dir / "track.json"
+    meta = json.loads(meta_path.read_text())
+    if meta.get("in_music"):
+        return True, "Already in your Apple Music library."
+    src = job_dir / meta["filename"]
+    dest, n = folder / src.name, 2
+    while dest.exists():  # two songs with the same title: don't overwrite one waiting to import
+        dest, n = folder / f"{src.stem} ({n}){src.suffix}", n + 1
+    shutil.copy2(src, dest)
+    meta["in_music"] = True
+    meta_path.write_text(json.dumps(meta))
+    return True, "Added to your Apple Music library."
 
 
 def lan_url():
@@ -91,6 +116,7 @@ def load_track(job_dir):
         "duration": meta.get("duration"),
         "filename": meta["filename"],
         "created": meta.get("created"),
+        "in_music": bool(meta.get("in_music")),
         "cover": f"/api/cover/{job_dir.name}" if (job_dir / "cover.jpg").is_file() else None,
     }
 
@@ -148,14 +174,7 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover):
             "created": time.time(),
         }))
 
-        music_note = None
-        if add_to_music:
-            folder = apple_music_folder()
-            if folder:
-                shutil.copy2(mp3, folder / mp3.name)
-                music_note = "Added to your Apple Music library."
-            else:
-                music_note = "Apple Music folder not found on this computer - use the download button instead."
+        music_note = send_to_music(job_dir)[1] if add_to_music else None
 
         update_job(
             job_id, status="done", stage="Done", progress=100,
@@ -256,6 +275,17 @@ def file(job_id):
         return jsonify(error="File not ready"), 404
     return send_file(folder / track["filename"], as_attachment=True,
                      download_name=track["filename"], mimetype="audio/mpeg")
+
+
+@app.post("/api/music/<job_id>")
+def add_to_music(job_id):
+    folder = job_dir_for(job_id)
+    if not folder or not load_track(folder):
+        return jsonify(error="That song isn't available any more."), 404
+    ok, note = send_to_music(folder)
+    if not ok:
+        return jsonify(error=note), 400
+    return jsonify(message=note, track=load_track(folder))
 
 
 @app.get("/api/cover/<job_id>")
