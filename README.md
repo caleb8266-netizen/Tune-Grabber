@@ -76,6 +76,22 @@ If your iPhone can't connect: check both devices are on the same Wi‑Fi, and on
 Anyone on your Wi‑Fi can open Tune Grabber while it's running. To keep it computer-only,
 start it with `HOST=127.0.0.1 python3 app.py`.
 
+## Age-restricted videos
+
+YouTube only plays age-restricted videos for signed-in adults. When you hit one, Tune Grabber
+offers to **use the YouTube sign-in from your web browser** (Chrome, Safari, Firefox, Brave,
+Edge or Arc) on the computer running it:
+
+1. Make sure you're signed in to YouTube in that browser.
+2. Pick the browser and press **Try again with my sign-in**.
+3. On a Mac, if a box asks for your password so Python can read the browser's saved data,
+   type your Mac password and click **Always Allow**.
+4. Safari only: System Settings → Privacy & Security → Full Disk Access → turn on Terminal,
+   then restart Tune Grabber.
+
+The choice is remembered (you'll see "Using your … YouTube sign-in"); press **Stop using it**
+to turn it off. Your sign-in is only read from the browser when needed, never saved by the app.
+
 ## If something breaks
 
 YouTube changes things often. Update the downloader with:

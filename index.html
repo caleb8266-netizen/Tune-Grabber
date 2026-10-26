@@ -72,6 +72,12 @@
     .stage { color: var(--muted); font-size: 14px; margin-top: 8px; }
     .msg { padding: 12px 14px; border-radius: 12px; font-size: 15px; margin-top: 12px; overflow-wrap: anywhere; }
     .msg.err { background: #3a1520; color: #ffb3c0; }
+    .signin { margin-top: 12px; padding: 14px; border-radius: 14px; background: #1d2030; border: 1px solid var(--line); }
+    .signin .row { margin-top: 10px; align-items: center; }
+    .signin select { flex: none; }
+    .signin .hint { margin-top: 8px; }
+    .using { margin-top: 10px; font-size: 13px; color: var(--muted); }
+    .using button { min-height: 0; padding: 0; background: none; color: var(--accent-2); font-size: 13px; font-weight: 600; }
     .msg.ok { background: #13301f; color: #9ff0c2; }
     .msg.warn { background: #3a2e12; color: #ffe08a; margin: 0 0 16px; }
     .hidden { display: none !important; }
@@ -141,6 +147,28 @@
       <button id="lookupBtn" type="submit">Preview</button>
     </form>
     <div id="lookupErr" class="msg err hidden"></div>
+    <div id="usingSignIn" class="using hidden">🔑 Using your <b id="usingName"></b> YouTube sign-in for videos that need it ·
+      <button id="stopSignIn" type="button">Stop using it</button></div>
+    <div id="signIn" class="signin hidden">
+      <b>Use your YouTube sign-in?</b>
+      <div class="hint" style="margin-top:4px">Tune Grabber borrows the sign-in already saved in a web browser on
+        the computer running it. Nothing is stored or shared. Be signed in to YouTube in that browser first.</div>
+      <div class="row">
+        <select id="browserPick" aria-label="Browser you use YouTube in">
+          <option value="chrome">Chrome</option>
+          <option value="safari">Safari</option>
+          <option value="firefox">Firefox</option>
+          <option value="brave">Brave</option>
+          <option value="edge">Edge</option>
+          <option value="arc">Arc</option>
+        </select>
+        <button id="signInBtn" type="button">Try again with my sign-in</button>
+      </div>
+      <div id="keychainHint" class="hint">On a Mac, a box may ask for your Mac password to let Python read the
+        browser's saved data. Type it and click <b>Always Allow</b>.</div>
+      <div id="safariHint" class="hint hidden">Safari needs one extra step: System Settings → Privacy &amp; Security →
+        <b>Full Disk Access</b> → turn on <b>Terminal</b>, then restart Tune Grabber.</div>
+    </div>
   </div>
 
   <div id="previewCard" class="card hidden">
@@ -239,6 +267,41 @@
   let currentUrl = "";
   let appleMusic = false;   // true when the Mac running Tune Grabber has a Music library
   let currentJob = null;
+  let signInBrowser = null;   // browser whose YouTube sign-in to use, e.g. "chrome"
+  let signInRetry = null;     // what to redo after choosing a browser
+  try { signInBrowser = localStorage.getItem("signInBrowser"); } catch {}
+
+  function showUsing() {
+    show($("usingSignIn"), !!signInBrowser);
+    if (signInBrowser) $("usingName").textContent = $("browserPick").querySelector(`[value="${signInBrowser}"]`)?.textContent || signInBrowser;
+  }
+  function hideSignIn() { show($("signIn"), false); }
+  // Show the sign-in offer right under the error that needs it.
+  function offerSignIn(afterEl, retry) {
+    afterEl.after($("signIn"));
+    signInRetry = retry;
+    if (signInBrowser) $("browserPick").value = signInBrowser;
+    else if (!isIOS && /Edg\//.test(navigator.userAgent)) $("browserPick").value = "edge";
+    else if (!isIOS && /Firefox\//.test(navigator.userAgent)) $("browserPick").value = "firefox";
+    else if (!isIOS && /Safari\//.test(navigator.userAgent) && !/Chrome\//.test(navigator.userAgent)) $("browserPick").value = "safari";
+    $("signInBtn").textContent = signInBrowser ? "Try again" : "Try again with my sign-in";
+    pickChanged();
+    show($("signIn"));
+  }
+  function pickChanged() { show($("safariHint"), $("browserPick").value === "safari"); }
+  $("browserPick").addEventListener("change", pickChanged);
+  $("signInBtn").addEventListener("click", () => {
+    signInBrowser = $("browserPick").value;
+    try { localStorage.setItem("signInBrowser", signInBrowser); } catch {}
+    showUsing(); hideSignIn();
+    if (signInRetry) signInRetry();
+  });
+  $("stopSignIn").addEventListener("click", () => {
+    signInBrowser = null;
+    try { localStorage.removeItem("signInBrowser"); } catch {}
+    showUsing();
+  });
+  showUsing();
   let toastTimer = null;
   let pollTimer = null;
 
@@ -254,7 +317,7 @@
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
     } : undefined);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Something went wrong.");
+    if (!res.ok) throw Object.assign(new Error(data.error || "Something went wrong."), { code: data.code });
     return data;
   }
 
@@ -359,7 +422,7 @@
   });
 
   function resetConvert() {
-    clearInterval(pollTimer);
+    clearInterval(pollTimer); hideSignIn();
     show($("progressWrap"), false); show($("convertMsg"), false);
     show($("downloadRow"), false); show($("iosSaveHint"), false); show($("result"), false); show($("musicHint"), false);
     $("bar").style.width = "0"; $("convertBtn").disabled = false; show($("convertBtn"), true);
@@ -370,10 +433,10 @@
     const url = $("url").value.trim();
     if (!url) return;
     $("url").blur(); // hide the iPhone keyboard
-    show($("lookupErr"), false);
+    show($("lookupErr"), false); hideSignIn();
     $("lookupBtn").disabled = true; $("lookupBtn").textContent = "Loading…";
     try {
-      const info = await api("/api/info", { url });
+      const info = await api("/api/info", { url, browser: signInBrowser });
       currentUrl = url;
       // playsinline keeps the video in the page on iPhone instead of jumping to full screen
       $("player").src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(info.id)}?playsinline=1&rel=0`;
@@ -385,6 +448,7 @@
       $("previewCard").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
       $("lookupErr").textContent = err.message; show($("lookupErr"));
+      if (["age", "signin", "cookies"].includes(err.code)) offerSignIn($("lookupErr"), () => $("lookupForm").requestSubmit());
     } finally {
       $("lookupBtn").disabled = false; $("lookupBtn").textContent = "Preview";
     }
@@ -397,6 +461,7 @@
     try {
       const { job_id } = await api("/api/convert", {
         url: currentUrl,
+        browser: signInBrowser,
         bitrate: Number($("bitrate").value),
         add_to_music: !$("musicOpt").classList.contains("hidden") && $("addToMusic").checked,
         square_cover: $("squareCover").checked,
@@ -429,6 +494,7 @@
           $("convertMsg").className = "msg err";
           $("convertMsg").textContent = job.error;
           show($("convertMsg")); $("convertBtn").disabled = false;
+          if (["age", "signin", "cookies"].includes(job.code)) offerSignIn($("convertMsg"), () => $("convertBtn").click());
         }
       }, 700);
     } catch (err) {

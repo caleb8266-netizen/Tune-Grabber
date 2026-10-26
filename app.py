@@ -89,6 +89,46 @@ def update_job(job_id, **fields):
         jobs[job_id].update(fields)
 
 
+# Browsers yt-dlp can borrow a YouTube sign-in from (needed for age-restricted videos).
+BROWSERS = ("chrome", "safari", "firefox", "brave", "edge", "arc", "opera", "vivaldi")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def sign_in_opts(browser):
+    """yt-dlp options that use the YouTube sign-in saved in the user's own browser."""
+    return {"cookiesfrombrowser": (browser,)} if browser in BROWSERS else {}
+
+
+def friendly_error(exc, browser):
+    """Turn a yt-dlp error into (message, code) the page can show to a person."""
+    text = ANSI.sub("", str(exc)).replace("ERROR: ", "").strip()
+    low = text.lower()
+    name = (browser or "").title()
+    if "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
+        if browser:
+            return (f"This video is age-restricted, and YouTube didn't accept the sign-in from {name}. "
+                    f"Open youtube.com in {name}, make sure you're signed in to an 18+ account, then try again."), "age"
+        return ("This video is age-restricted, so YouTube wants you signed in to see it. "
+                "Tune Grabber can use the YouTube sign-in from your web browser for it."), "age"
+    if "not a bot" in low or "sign in to confirm" in low:
+        if browser:
+            return (f"YouTube asked to confirm you're not a bot and didn't accept the sign-in from {name}. "
+                    f"Open youtube.com in {name}, play any video, then try again."), "signin"
+        return ("YouTube wants you to sign in before it allows this download. "
+                "Tune Grabber can use the YouTube sign-in from your web browser."), "signin"
+    if ("could not find" in low and "cookies" in low) or "failed to decrypt" in low or "keychain" in low:
+        return (f"Couldn't read the YouTube sign-in from {name or 'your browser'}. Make sure that browser is "
+                "installed and you're signed in to YouTube there. On a Mac, click Always Allow if it asks "
+                "for your password to unlock the browser's saved data."), "cookies"
+    if "private video" in low:
+        return "This video is private, so it can't be downloaded.", None
+    if "video unavailable" in low or "not available" in low:
+        return "YouTube says this video isn't available (it may be removed or blocked in your country).", None
+    if "is not a valid url" in low or "unsupported url" in low:
+        return "That doesn't look like a YouTube link. Copy it again from YouTube's Share button.", None
+    return text, None
+
+
 # ffmpeg filter that trims a widescreen thumbnail to a centered square, like album art.
 SQUARE_CROP = "crop='if(gt(ih,iw),iw,ih)':'if(gt(iw,ih),ih,iw)'"
 
@@ -121,7 +161,7 @@ def load_track(job_dir):
     }
 
 
-def run_conversion(job_id, url, bitrate, add_to_music, square_cover):
+def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=None):
     job_dir = DOWNLOAD_DIR / job_id
     job_dir.mkdir(exist_ok=True)
 
@@ -150,6 +190,7 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover):
             {"key": "EmbedThumbnail", "already_have_thumbnail": True},
             {"key": "FFmpegMetadata", "add_metadata": True},
         ],
+        **sign_in_opts(browser),
     }
     if square_cover:
         opts["postprocessor_args"] = {"thumbnailsconvertor+ffmpeg_o": ["-vf", SQUARE_CROP]}
@@ -181,7 +222,8 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover):
             filename=mp3.name, music_note=music_note, track=load_track(job_dir),
         )
     except Exception as exc:  # surface yt-dlp/ffmpeg errors to the page
-        update_job(job_id, status="error", stage="Error", error=str(exc))
+        message, code = friendly_error(exc, browser)
+        update_job(job_id, status="error", stage="Error", error=message, code=code)
 
 
 @app.get("/")
@@ -219,14 +261,18 @@ def manifest():
 
 @app.post("/api/info")
 def info():
-    url = (request.get_json(silent=True) or {}).get("url", "").strip()
+    body = request.get_json(silent=True) or {}
+    url = body.get("url", "").strip()
+    browser = body.get("browser")
     if not url:
         return jsonify(error="Paste a YouTube link first."), 400
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True}) as ydl:
+        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, **sign_in_opts(browser)}
+        with yt_dlp.YoutubeDL(opts) as ydl:
             meta = ydl.extract_info(url, download=False)
     except Exception as exc:
-        return jsonify(error=f"Couldn't read that link: {exc}"), 400
+        message, code = friendly_error(exc, browser)
+        return jsonify(error=message, code=code), 400
     return jsonify(
         id=meta.get("id"),
         title=meta.get("title"),
@@ -252,7 +298,8 @@ def convert():
         jobs[job_id] = {"status": "working", "stage": "Starting", "progress": 0}
     threading.Thread(
         target=run_conversion,
-        args=(job_id, url, bitrate, bool(body.get("add_to_music")), body.get("square_cover", True) is not False),
+        args=(job_id, url, bitrate, bool(body.get("add_to_music")), body.get("square_cover", True) is not False,
+              body.get("browser")),
         daemon=True,
     ).start()
     return jsonify(job_id=job_id)
