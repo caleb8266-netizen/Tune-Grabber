@@ -66,6 +66,11 @@ If your iPhone can't connect: check both devices are on the same Wi‑Fi, and on
   into the Music app – no Downloads folder involved. With the switch off, press
   **🎵 Add to Apple Music** after converting, or tap the 🎵 badge on a song under
   *Your downloads*. (Open the Music app once first, so its library exists.)
+- On a Mac, Tune Grabber asks the **Music app itself** to add each song (the first time,
+  macOS asks whether Terminal may control Music: click **OK**). If you clicked Don't Allow,
+  turn it on in System Settings → Privacy & Security → Automation → Terminal → Music.
+- **🎵 Add all to Apple Music** (in *Your downloads*) sends every song you've converted;
+  songs already in your library are skipped. Tapping a ✓ checks that song and adds it if missing.
 - **⬇ Save MP3 file** is still there if you want the file itself.
 - **iPhone:** the 🎵 button works from your phone too – it adds the song to your Mac's library,
   and *Sync Library* brings it to your iPhone.

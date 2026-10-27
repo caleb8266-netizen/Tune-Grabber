@@ -56,23 +56,90 @@ def apple_music_folder():
     return None
 
 
-def send_to_music(job_dir):
-    """Copy a finished MP3 into the Music app's auto-import folder. Returns a message for the page."""
+MUSIC_APP = Path("/System/Applications/Music.app")
+
+# Asks the Music app to add a file, unless a song with the same title is already in the library.
+# argv: file path, song title, "force" to add even if the title is already there.
+ADD_TO_MUSIC_SCRIPT = """
+on run argv
+    set f to POSIX file (item 1 of argv)
+    set songName to item 2 of argv
+    tell application "Music"
+        if (item 3 of argv) is not "force" then
+            if (count of (every track of library playlist 1 whose name is songName)) > 0 then return "exists"
+        end if
+        add f
+    end tell
+    return "added"
+end run
+"""
+
+
+def can_script_music():
+    return platform.system() == "Darwin" and MUSIC_APP.exists() and shutil.which("osascript") is not None
+
+
+def apple_music_available():
+    return can_script_music() or apple_music_folder() is not None
+
+
+def add_with_music_app(path, title, force=False):
+    """Returns ("added" | "exists", None) on success, or (None, error text)."""
+    try:
+        run = subprocess.run(
+            ["osascript", "-e", ADD_TO_MUSIC_SCRIPT, str(path), title, "force" if force else ""],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    if run.returncode == 0:
+        return run.stdout.strip() or "added", None
+    return None, (run.stderr or run.stdout).strip()
+
+
+def copy_to_auto_add(src):
     folder = apple_music_folder()
     if not folder:
-        return False, "Couldn't find the Apple Music library on this Mac. Open the Music app once, then try again."
-    meta_path = job_dir / "track.json"
-    meta = json.loads(meta_path.read_text())
-    if meta.get("in_music"):
-        return True, "Already in your Apple Music library."
-    src = job_dir / meta["filename"]
+        return False
     dest, n = folder / src.name, 2
     while dest.exists():  # two songs with the same title: don't overwrite one waiting to import
         dest, n = folder / f"{src.stem} ({n}){src.suffix}", n + 1
     shutil.copy2(src, dest)
-    meta["in_music"] = True
-    meta_path.write_text(json.dumps(meta))
-    return True, "Added to your Apple Music library."
+    return True
+
+
+def send_to_music(job_dir, force=False):
+    """Put a finished MP3 into the Music library. Returns (ok, message for the page)."""
+    meta_path = job_dir / "track.json"
+    meta = json.loads(meta_path.read_text())
+    src = job_dir / meta["filename"]
+    title = meta.get("title") or src.stem
+
+    def mark_added():
+        meta["in_music"] = True
+        meta_path.write_text(json.dumps(meta))
+
+    if can_script_music():
+        result, err = add_with_music_app(src, title, force)
+        if result:
+            mark_added()
+            if result == "exists":
+                return True, "Already in your Apple Music library."
+            return True, "Added to your Apple Music library."
+        if "-1743" in err or "not authorized" in err.lower() or "not allowed" in err.lower():
+            return False, ("Your Mac blocked Tune Grabber from talking to the Music app. Open System Settings → "
+                           "Privacy & Security → Automation, find Terminal, and turn on Music. Then try again.")
+        if copy_to_auto_add(src):  # fall back to the auto-import folder
+            mark_added()
+            return True, "Sent to Apple Music's import folder."
+        return False, f"The Music app couldn't add this song: {err}"
+
+    if meta.get("in_music") and not force:
+        return True, "Already sent to Apple Music."
+    if copy_to_auto_add(src):
+        mark_added()
+        return True, "Sent to Apple Music's import folder."
+    return False, "Couldn't find the Apple Music library on this Mac. Open the Music app once, then try again."
 
 
 def lan_url():
@@ -254,7 +321,8 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=Non
             "created": time.time(),
         }))
 
-        music_note = send_to_music(job_dir)[1] if add_to_music else None
+        # A song you just converted is always added, even if an older one shares its title.
+        music_note = send_to_music(job_dir, force=True)[1] if add_to_music else None
 
         update_job(
             job_id, status="done", stage="Done", progress=100,
@@ -274,7 +342,8 @@ def index():
 def config():
     return jsonify(
         ffmpeg=bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
-        apple_music=apple_music_folder() is not None,
+        apple_music=apple_music_available(),
+        music_app=can_script_music(),
         js_solver=js_solver_ready(),
         lan_url=lan_url(),
     )
@@ -368,10 +437,27 @@ def add_to_music(job_id):
     folder = job_dir_for(job_id)
     if not folder or not load_track(folder):
         return jsonify(error="That song isn't available any more."), 404
-    ok, note = send_to_music(folder)
+    ok, note = send_to_music(folder, force=bool((request.get_json(silent=True) or {}).get("force")))
     if not ok:
         return jsonify(error=note), 400
     return jsonify(message=note, track=load_track(folder))
+
+
+@app.post("/api/music-all")
+def add_all_to_music():
+    """Send every downloaded song to Apple Music; songs already in the library are skipped."""
+    added = present = 0
+    for folder in sorted(d for d in DOWNLOAD_DIR.iterdir() if d.is_dir()):
+        if not load_track(folder):
+            continue
+        ok, note = send_to_music(folder, force=False) if can_script_music() else (True, "")
+        if not ok:
+            return jsonify(error=note, added=added), 400
+        if note.startswith("Already"):
+            present += 1
+        else:
+            added += 1
+    return jsonify(added=added, present=present)
 
 
 @app.get("/api/cover/<job_id>")

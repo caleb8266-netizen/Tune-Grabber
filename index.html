@@ -102,6 +102,8 @@
     .result .ok { color: #9ff0c2; font-size: 14px; margin-top: 6px; }
     .lib-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 14px; }
     .lib-head h2 { font-size: 18px; margin: 0; }
+    .lib-actions { display: flex; align-items: center; gap: 12px; }
+    .lib-actions button { min-height: 36px; padding: 6px 12px; font-size: 14px; border-radius: 10px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
     .tile { display: block; color: var(--text); text-decoration: none; min-width: 0; }
     .tile .art { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #0b0c10; }
@@ -231,7 +233,9 @@
   </div>
 
   <div id="libraryCard" class="card hidden">
-    <div class="lib-head"><h2>🎧 Your downloads</h2><span id="libCount" class="hint"></span></div>
+    <div class="lib-head"><h2>🎧 Your downloads</h2>
+      <div class="lib-actions"><span id="libCount" class="hint"></span>
+        <button id="addAllBtn" type="button" class="secondary hidden">🎵 Add all to Apple Music</button></div></div>
     <div id="grid" class="grid"></div>
   </div>
 
@@ -268,7 +272,8 @@
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
   let currentUrl = "";
-  let appleMusic = false;   // true when the Mac running Tune Grabber has a Music library
+  let appleMusic = false;
+  let musicApp = false;     // true when Tune Grabber can ask the Music app directly   // true when the Mac running Tune Grabber has a Music library
   let currentJob = null;
   let signInBrowser = null;   // browser whose YouTube sign-in to use, e.g. "chrome"
   let signInRetry = null;     // what to redo after choosing a browser
@@ -338,6 +343,7 @@
   api("/api/config").then((cfg) => {
     show($("setupWarn"), !cfg.ffmpeg);
     appleMusic = cfg.apple_music;
+    musicApp = cfg.music_app;
     show($("musicOpt"), appleMusic);
     $("downloadLink").textContent = appleMusic ? "⬇ Save MP3 file" : "⬇ Save MP3";
     $("downloadLink").classList.toggle("secondary", appleMusic);
@@ -374,10 +380,10 @@
     try { localStorage.setItem("addToMusic", $("addToMusic").checked ? "on" : "off"); } catch {}
   });
 
-  function toast(text) {
+  function toast(text, ms = 3500) {
     clearTimeout(toastTimer);
     $("toast").textContent = text; show($("toast"));
-    toastTimer = setTimeout(() => show($("toast"), false), 3500);
+    toastTimer = setTimeout(() => show($("toast"), false), ms);
   }
   function setMusicBtn(inMusic) {
     $("musicBtn").disabled = inMusic;
@@ -392,7 +398,7 @@
       loadLibrary();
       return true;
     } catch (err) {
-      toast(err.message);
+      toast(err.message, 9000);
       return false;
     }
   }
@@ -408,10 +414,14 @@
     let tracks;
     try { ({ tracks } = await api("/api/library")); } catch { return; }
     show($("libraryCard"), tracks.length > 0);
+    show($("addAllBtn"), musicApp && tracks.length > 0);
     $("libCount").textContent = `${tracks.length} song${tracks.length === 1 ? "" : "s"}`;
     $("grid").innerHTML = tracks.map((t) => {
       const music = !appleMusic ? "" : t.in_music
-        ? '<span class="dl done" title="In Apple Music">✓</span>'
+        ? (musicApp
+          ? `<button type="button" class="dl done" data-music="${t.id}" title="Sent to Apple Music. Tap to check it's there"
+               aria-label="Check it's in Apple Music">✓</button>`
+          : '<span class="dl done" title="Sent to Apple Music">✓</span>')
         : `<button type="button" class="dl" data-music="${t.id}" title="Add to Apple Music" aria-label="Add to Apple Music">🎵</button>`;
       return `
       <div class="tile">
@@ -428,6 +438,20 @@
   $("grid").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-music]");
     if (btn) { btn.disabled = true; sendToMusic(btn.dataset.music).then((ok) => { btn.disabled = !ok ? false : true; }); }
+  });
+  $("addAllBtn").addEventListener("click", async () => {
+    const btn = $("addAllBtn");
+    btn.disabled = true; btn.textContent = "Adding… (Music may open)";
+    try {
+      const r = await api("/api/music-all", {});
+      toast(r.added ? `🎵 Added ${r.added} song${r.added === 1 ? "" : "s"} to Apple Music` +
+            (r.present ? ` · ${r.present} already there` : "") : "🎵 All your songs are already in Apple Music", 6000);
+    } catch (err) {
+      toast(err.message, 9000);
+    } finally {
+      btn.disabled = false; btn.textContent = "🎵 Add all to Apple Music";
+      loadLibrary();
+    }
   });
 
   $("musicBtn").addEventListener("click", async () => {
