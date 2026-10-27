@@ -1,3 +1,4 @@
 flask>=3.0
-yt-dlp>=2025.1.1
+# [default] adds yt-dlp-ejs, which solves YouTube's JavaScript challenges
+yt-dlp[default]>=2025.11.12
 segno>=1.5

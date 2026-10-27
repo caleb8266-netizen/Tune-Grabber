@@ -4,6 +4,7 @@ Run:  python3 app.py   then open http://localhost:8765
 Your iPhone can use it too: open the "iPhone" address it prints (same Wi-Fi).
 """
 
+import importlib.util
 import io
 import json
 import os
@@ -12,6 +13,7 @@ import time
 import platform
 import shutil
 import socket
+import subprocess
 import threading
 import uuid
 from pathlib import Path
@@ -99,9 +101,42 @@ def sign_in_opts(browser):
     return {"cookiesfrombrowser": (browser,)} if browser in BROWSERS else {}
 
 
+# YouTube makes signed-in requests solve a JavaScript challenge; yt-dlp needs a JS engine
+# (Deno, Node or Bun) plus the yt-dlp-ejs solver package for that.
+JS_ENGINES = ("deno", "node", "bun")
+
+
+def node_is_new_enough():
+    """yt-dlp only uses Node 22 or newer."""
+    try:
+        out = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5).stdout
+        return int(out.strip().lstrip("v").split(".")[0]) >= 22
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def js_solver_ready():
+    engine = shutil.which("deno") or shutil.which("bun") or (shutil.which("node") and node_is_new_enough())
+    return bool(engine) and bool(importlib.util.find_spec("yt_dlp_ejs"))
+
+
+def base_opts(browser):
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "js_runtimes": {engine: {} for engine in JS_ENGINES},
+        **sign_in_opts(browser),
+    }
+
+
+def clean_error(exc):
+    return ANSI.sub("", str(exc)).replace("ERROR: ", "").strip()
+
+
 def friendly_error(exc, browser):
     """Turn a yt-dlp error into (message, code) the page can show to a person."""
-    text = ANSI.sub("", str(exc)).replace("ERROR: ", "").strip()
+    text = clean_error(exc)
     low = text.lower()
     name = (browser or "").title()
     if "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
@@ -120,9 +155,16 @@ def friendly_error(exc, browser):
         return (f"Couldn't read the YouTube sign-in from {name or 'your browser'}. Make sure that browser is "
                 "installed and you're signed in to YouTube there. On a Mac, click Always Allow if it asks "
                 "for your password to unlock the browser's saved data."), "cookies"
+    if "requested format is not available" in low or "only images are available" in low:
+        if browser and not js_solver_ready():
+            return ("YouTube needs an extra helper (Deno) to download while you're signed in, and it isn't "
+                    "installed yet. Stop Tune Grabber (Control + C in Terminal) and start it again with the "
+                    "start command; it installs the helper for you."), "solver"
+        return ("YouTube didn't offer a downloadable audio version of this video. Stop Tune Grabber and start "
+                "it again so it can update its YouTube downloader, then try once more."), None
     if "private video" in low:
         return "This video is private, so it can't be downloaded.", None
-    if "video unavailable" in low or "not available" in low:
+    if "video unavailable" in low or "this video is not available" in low:
         return "YouTube says this video isn't available (it may be removed or blocked in your country).", None
     if "is not a valid url" in low or "unsupported url" in low:
         return "That doesn't look like a YouTube link. Copy it again from YouTube's Share button.", None
@@ -176,10 +218,7 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=Non
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(job_dir / "%(title)s.%(ext)s"),
-        "noplaylist": True,
         "writethumbnail": True,
-        "quiet": True,
-        "no_warnings": True,
         "noprogress": True,
         "progress_hooks": [on_progress],
         "postprocessors": [
@@ -190,7 +229,7 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=Non
             {"key": "EmbedThumbnail", "already_have_thumbnail": True},
             {"key": "FFmpegMetadata", "add_metadata": True},
         ],
-        **sign_in_opts(browser),
+        **base_opts(browser),
     }
     if square_cover:
         opts["postprocessor_args"] = {"thumbnailsconvertor+ffmpeg_o": ["-vf", SQUARE_CROP]}
@@ -223,7 +262,7 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=Non
         )
     except Exception as exc:  # surface yt-dlp/ffmpeg errors to the page
         message, code = friendly_error(exc, browser)
-        update_job(job_id, status="error", stage="Error", error=message, code=code)
+        update_job(job_id, status="error", stage="Error", error=message, code=code, detail=clean_error(exc))
 
 
 @app.get("/")
@@ -236,6 +275,7 @@ def config():
     return jsonify(
         ffmpeg=bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
         apple_music=apple_music_folder() is not None,
+        js_solver=js_solver_ready(),
         lan_url=lan_url(),
     )
 
@@ -267,12 +307,11 @@ def info():
     if not url:
         return jsonify(error="Paste a YouTube link first."), 400
     try:
-        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, **sign_in_opts(browser)}
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(base_opts(browser)) as ydl:
             meta = ydl.extract_info(url, download=False)
     except Exception as exc:
         message, code = friendly_error(exc, browser)
-        return jsonify(error=message, code=code), 400
+        return jsonify(error=message, code=code, detail=clean_error(exc)), 400
     return jsonify(
         id=meta.get("id"),
         title=meta.get("title"),

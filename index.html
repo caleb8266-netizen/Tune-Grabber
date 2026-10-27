@@ -72,6 +72,9 @@
     .stage { color: var(--muted); font-size: 14px; margin-top: 8px; }
     .msg { padding: 12px 14px; border-radius: 12px; font-size: 15px; margin-top: 12px; overflow-wrap: anywhere; }
     .msg.err { background: #3a1520; color: #ffb3c0; }
+    .msg details { margin-top: 8px; font-size: 12px; opacity: .85; }
+    .msg details summary { cursor: pointer; }
+    .msg details code { display: block; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
     .signin { margin-top: 12px; padding: 14px; border-radius: 14px; background: #1d2030; border: 1px solid var(--line); }
     .signin .row { margin-top: 10px; align-items: center; }
     .signin select { flex: none; }
@@ -306,6 +309,17 @@
   let pollTimer = null;
 
   function show(el, on = true) { el.classList.toggle("hidden", !on); }
+  // Plain-English message, with YouTube's exact wording tucked away for troubleshooting.
+  function setError(el, message, detail) {
+    el.textContent = message;
+    if (detail && detail !== message) {
+      const d = document.createElement("details");
+      const sum = document.createElement("summary"); sum.textContent = "Technical details";
+      const code = document.createElement("code"); code.textContent = detail;
+      d.append(sum, code); el.append(d);
+    }
+    show(el);
+  }
   function fmtTime(s) {
     if (!s) return "";
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
@@ -317,7 +331,7 @@
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
     } : undefined);
     const data = await res.json();
-    if (!res.ok) throw Object.assign(new Error(data.error || "Something went wrong."), { code: data.code });
+    if (!res.ok) throw Object.assign(new Error(data.error || "Something went wrong."), { code: data.code, detail: data.detail });
     return data;
   }
 
@@ -447,7 +461,7 @@
       show($("previewCard"));
       $("previewCard").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
-      $("lookupErr").textContent = err.message; show($("lookupErr"));
+      setError($("lookupErr"), err.message, err.detail);
       if (["age", "signin", "cookies"].includes(err.code)) offerSignIn($("lookupErr"), () => $("lookupForm").requestSubmit());
     } finally {
       $("lookupBtn").disabled = false; $("lookupBtn").textContent = "Preview";
@@ -492,8 +506,7 @@
         } else if (job.status === "error") {
           clearInterval(pollTimer);
           $("convertMsg").className = "msg err";
-          $("convertMsg").textContent = job.error;
-          show($("convertMsg")); $("convertBtn").disabled = false;
+          setError($("convertMsg"), job.error, job.detail); $("convertBtn").disabled = false;
           if (["age", "signin", "cookies"].includes(job.code)) offerSignIn($("convertMsg"), () => $("convertBtn").click());
         }
       }, 700);

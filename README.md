@@ -89,6 +89,10 @@ Edge or Arc) on the computer running it:
 4. Safari only: System Settings → Privacy & Security → Full Disk Access → turn on Terminal,
    then restart Tune Grabber.
 
+Signed-in downloads need **Deno**, a small JavaScript engine the downloader uses to answer
+YouTube's checks. The Mac start script installs it automatically (`brew install deno`);
+on Windows run `winget install DenoLand.Deno`.
+
 The choice is remembered (you'll see "Using your … YouTube sign-in"); press **Stop using it**
 to turn it off. Your sign-in is only read from the browser when needed, never saved by the app.
 
