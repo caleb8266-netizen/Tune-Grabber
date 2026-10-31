@@ -1,3 +1,7 @@
 downloads/
 .venv/
 __pycache__/
+guest-downloads/
+work/
+guest.log
+tunnel.log

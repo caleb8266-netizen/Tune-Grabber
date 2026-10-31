@@ -139,6 +139,8 @@
 <main>
   <h1>🎵 <span>Tune Grabber</span></h1>
   <p class="sub">Paste a YouTube link, preview the video, and save the sound as an MP3.</p>
+  <div id="guestNote" class="msg ok hidden" style="margin:0 0 16px">🎁 Someone shared Tune Grabber with you.
+    Convert a song, then tap <b>Save MP3</b> to keep it. This link only works for a limited time.</div>
 
   <div id="setupWarn" class="msg warn hidden">
     FFmpeg isn't installed on the computer running Tune Grabber, so MP3 conversion won't work yet. See the README for the one-line install.
@@ -234,7 +236,7 @@
 
   <div id="libraryCard" class="card hidden">
     <div class="lib-head"><h2>🎧 Your downloads</h2>
-      <div class="lib-actions"><span id="libCount" class="hint"></span>
+      <div class="lib-actions"><span id="libPlace" class="hint hidden"></span><span id="libCount" class="hint"></span>
         <button id="addAllBtn" type="button" class="secondary hidden">🎵 Add all to Apple Music</button></div></div>
     <div id="grid" class="grid"></div>
   </div>
@@ -342,6 +344,11 @@
 
   api("/api/config").then((cfg) => {
     show($("setupWarn"), !cfg.ffmpeg);
+    if (cfg.guest) {
+      signInBrowser = null;
+      show($("guestNote")); showUsing();
+    }
+    if (cfg.songs_place) { $("libPlace").textContent = `☁️ ${cfg.songs_place} ·`; show($("libPlace")); }
     appleMusic = cfg.apple_music;
     musicApp = cfg.music_app;
     show($("musicOpt"), appleMusic);

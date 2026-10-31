@@ -81,6 +81,35 @@ If your iPhone can't connect: check both devices are on the same Wi‑Fi, and on
 Anyone on your Wi‑Fi can open Tune Grabber while it's running. To keep it computer-only,
 start it with `HOST=127.0.0.1 python3 app.py`.
 
+## Where your songs are saved
+
+On a Mac signed in to iCloud, MP3s are saved in **iCloud Drive › Tune Grabber** (with their
+cover art built in), so they show up in the Files app on your iPhone, on your other Macs, and on
+icloud.com. Songs from older versions are moved there automatically the first time you start
+this version. The first time, macOS may ask whether Terminal can access iCloud Drive: click OK.
+(To keep songs on the Mac only, start it with `TG_ICLOUD=0 bash start-mac.command`.)
+
+## 🔗 Share with a friend (temporary link)
+
+GitHub can host plain web pages, but not the converter itself, so a friend's link has to come
+from your Mac while it's on. To share:
+
+```
+cd ~/Tune-Grabber-main && bash share-mac.command
+```
+
+It prints a link like `https://some-words.trycloudflare.com/?code=1a2b3c4d` and copies it, so
+you can paste it in a message. Your friend opens it in any browser on any computer or phone.
+
+- It's a **separate guest copy**: it never uses your YouTube sign-in, can't touch your Apple
+  Music, can't see your songs, and needs the passcode (already inside the link).
+- It works **only while that Terminal window is open** and your Mac is awake. Press
+  Control + C or close the window and the link stops working for good; the next share gets
+  a new link and passcode.
+- The first time, it installs Cloudflare's free `cloudflared` tool with Homebrew. No account
+  needed.
+- You can keep using your own Tune Grabber at the same time.
+
 ## Age-restricted videos
 
 YouTube only plays age-restricted videos for signed-in adults. When you hit one, Tune Grabber

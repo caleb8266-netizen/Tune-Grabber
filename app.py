@@ -2,8 +2,10 @@
 
 Run:  python3 app.py   then open http://localhost:8765
 Your iPhone can use it too: open the "iPhone" address it prints (same Wi-Fi).
+To share with a friend for a while, run share-mac.command (starts a locked-down guest copy).
 """
 
+import hmac
 import importlib.util
 import io
 import json
@@ -18,13 +20,31 @@ import threading
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_file, send_from_directory, session
 import segno
 import yt_dlp
 
 BASE_DIR = Path(__file__).resolve().parent
-DOWNLOAD_DIR = BASE_DIR / "downloads"
-DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+# Guest mode is the copy share-mac.command starts for a friend: no YouTube sign-in, no Apple Music,
+# its own song list, and a passcode.
+GUEST = os.environ.get("TG_GUEST") == "1"
+PASSCODE = os.environ.get("TG_PASSCODE", "")
+
+ICLOUD_DRIVE = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+LEGACY_DIR = BASE_DIR / "downloads"
+if GUEST:
+    SONGS_DIR = DATA_DIR = BASE_DIR / "guest-downloads"
+elif ICLOUD_DRIVE.is_dir() and os.environ.get("TG_ICLOUD", "1") != "0":
+    # MP3s sit in iCloud Drive with readable names; cover art and details go in a hidden folder.
+    SONGS_DIR = ICLOUD_DRIVE / "Tune Grabber"
+    DATA_DIR = SONGS_DIR / ".tunegrabber"
+else:
+    SONGS_DIR = DATA_DIR = LEGACY_DIR
+SONGS_IN_ICLOUD = SONGS_DIR != DATA_DIR
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Conversions happen here first so iCloud doesn't sync half-finished files.
+WORK_DIR = BASE_DIR / "work" if SONGS_IN_ICLOUD else DATA_DIR
 
 # macOS: anything dropped in this folder is imported into the Music app automatically.
 APPLE_MUSIC_AUTO_ADD = (
@@ -34,6 +54,7 @@ APPLE_MUSIC_AUTO_ADD = (
 PORT = int(os.environ.get("PORT", 8765))
 
 app = Flask(__name__, static_folder=str(BASE_DIR / "static"), static_url_path="/static")
+app.secret_key = os.urandom(32)
 jobs = {}
 jobs_lock = threading.Lock()
 
@@ -76,11 +97,11 @@ end run
 
 
 def can_script_music():
-    return platform.system() == "Darwin" and MUSIC_APP.exists() and shutil.which("osascript") is not None
+    return not GUEST and platform.system() == "Darwin" and MUSIC_APP.exists() and shutil.which("osascript") is not None
 
 
 def apple_music_available():
-    return can_script_music() or apple_music_folder() is not None
+    return not GUEST and (can_script_music() or apple_music_folder() is not None)
 
 
 def add_with_music_app(path, title, force=False):
@@ -101,10 +122,7 @@ def copy_to_auto_add(src):
     folder = apple_music_folder()
     if not folder:
         return False
-    dest, n = folder / src.name, 2
-    while dest.exists():  # two songs with the same title: don't overwrite one waiting to import
-        dest, n = folder / f"{src.stem} ({n}){src.suffix}", n + 1
-    shutil.copy2(src, dest)
+    shutil.copy2(src, unique_path(folder, src.name))  # don't overwrite one waiting to import
     return True
 
 
@@ -112,7 +130,7 @@ def send_to_music(job_dir, force=False):
     """Put a finished MP3 into the Music library. Returns (ok, message for the page)."""
     meta_path = job_dir / "track.json"
     meta = json.loads(meta_path.read_text())
-    src = job_dir / meta["filename"]
+    src = mp3_path(job_dir, meta)
     title = meta.get("title") or src.stem
 
     def mark_added():
@@ -144,6 +162,8 @@ def send_to_music(job_dir, force=False):
 
 def lan_url():
     """Address other devices on the same Wi-Fi (e.g. your iPhone) can use."""
+    if GUEST:
+        return None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("10.255.255.255", 1))  # no packet is sent; just picks the Wi-Fi interface
@@ -165,6 +185,8 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 def sign_in_opts(browser):
     """yt-dlp options that use the YouTube sign-in saved in the user's own browser."""
+    if GUEST:  # never lend the owner's YouTube account to a guest
+        return {}
     return {"cookiesfrombrowser": (browser,)} if browser in BROWSERS else {}
 
 
@@ -206,6 +228,9 @@ def friendly_error(exc, browser):
     text = clean_error(exc)
     low = text.lower()
     name = (browser or "").title()
+    if GUEST and ("confirm your age" in low or "inappropriate for some users" in low or "sign in to confirm" in low):
+        return ("This video needs a YouTube sign-in (it's age-restricted or YouTube asked to verify), "
+                "which this shared version of Tune Grabber can't use. Try a different video."), None
     if "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
         if browser:
             return (f"This video is age-restricted, and YouTube didn't accept the sign-in from {name}. "
@@ -246,8 +271,49 @@ def job_dir_for(job_id):
     """Folder for a job, or None if the id isn't one we could have made (blocks ../ tricks)."""
     if not re.fullmatch(r"[0-9a-f]{32}", job_id or ""):
         return None
-    folder = DOWNLOAD_DIR / job_id
+    folder = DATA_DIR / job_id
     return folder if folder.is_dir() else None
+
+
+def mp3_path(job_dir, meta):
+    """Songs saved to iCloud Drive live in SONGS_DIR; older ones sit next to their details."""
+    return (SONGS_DIR if meta.get("in_songs") else job_dir) / meta["filename"]
+
+
+def unique_path(folder, name):
+    dest, n = folder / name, 2
+    while dest.exists():  # two songs with the same title: keep both
+        dest, n = folder / f"{Path(name).stem} ({n}){Path(name).suffix}", n + 1
+    return dest
+
+
+def move_into_songs(job_dir, meta):
+    """Move a song's MP3 into SONGS_DIR (iCloud Drive) and remember where it went."""
+    src = job_dir / meta["filename"]
+    dest = unique_path(SONGS_DIR, src.name)
+    shutil.move(str(src), dest)
+    meta["filename"], meta["in_songs"] = dest.name, True
+
+
+def migrate_old_downloads():
+    """One-time move of songs from the app's old downloads folder into iCloud Drive."""
+    if not SONGS_IN_ICLOUD or not LEGACY_DIR.is_dir():
+        return 0
+    moved = 0
+    for old in sorted(LEGACY_DIR.iterdir()):
+        if not old.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", old.name) or (DATA_DIR / old.name).exists():
+            continue
+        try:
+            meta = json.loads((old / "track.json").read_text())
+            if not (old / meta["filename"]).is_file():
+                continue
+            move_into_songs(old, meta)
+            (old / "track.json").write_text(json.dumps(meta))
+            shutil.move(str(old), DATA_DIR / old.name)
+            moved += 1
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"    (left {old.name} where it was: {exc})")
+    return moved
 
 
 def load_track(job_dir):
@@ -256,7 +322,7 @@ def load_track(job_dir):
         meta = json.loads((job_dir / "track.json").read_text())
     except (OSError, ValueError):
         return None
-    if not (job_dir / meta.get("filename", "")).is_file():
+    if not meta.get("filename") or not mp3_path(job_dir, meta).is_file():
         return None
     return {
         "id": job_dir.name,
@@ -271,8 +337,8 @@ def load_track(job_dir):
 
 
 def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=None):
-    job_dir = DOWNLOAD_DIR / job_id
-    job_dir.mkdir(exist_ok=True)
+    job_dir = WORK_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
 
     def on_progress(d):
         if d["status"] == "downloading":
@@ -313,24 +379,66 @@ def run_conversion(job_id, url, bitrate, add_to_music, square_cover, browser=Non
         jpgs = list(job_dir.glob("*.jpg"))
         if jpgs:
             jpgs[0].replace(job_dir / "cover.jpg")
-        (job_dir / "track.json").write_text(json.dumps({
+        track = {
             "title": meta.get("title") or mp3.stem,
             "channel": meta.get("uploader") or meta.get("channel"),
             "duration": meta.get("duration"),
             "filename": mp3.name,
             "created": time.time(),
-        }))
+        }
+        if SONGS_IN_ICLOUD:
+            move_into_songs(job_dir, track)
+        (job_dir / "track.json").write_text(json.dumps(track))
+        if job_dir.parent != DATA_DIR:  # finished: move the cover and details next to the other songs
+            for leftover in job_dir.iterdir():
+                if leftover.name not in ("track.json", "cover.jpg"):
+                    leftover.unlink()
+            job_dir = Path(shutil.move(str(job_dir), DATA_DIR / job_id))
 
         # A song you just converted is always added, even if an older one shares its title.
         music_note = send_to_music(job_dir, force=True)[1] if add_to_music else None
 
         update_job(
             job_id, status="done", stage="Done", progress=100,
-            filename=mp3.name, music_note=music_note, track=load_track(job_dir),
+            filename=track["filename"], music_note=music_note, track=load_track(job_dir),
         )
     except Exception as exc:  # surface yt-dlp/ffmpeg errors to the page
+        if job_dir.parent == WORK_DIR != DATA_DIR:
+            shutil.rmtree(job_dir, ignore_errors=True)  # only this job's own scratch folder
         message, code = friendly_error(exc, browser)
         update_job(job_id, status="error", stage="Error", error=message, code=code, detail=clean_error(exc))
+
+
+PASSCODE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Tune Grabber</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0e0f13;color:#f2f3f5;
+font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+form{box-sizing:border-box;background:#181a21;border:1px solid #2a2d37;border-radius:18px;padding:24px;max-width:360px;width:100%}
+h1{margin:0 0 6px;font-size:24px}p{color:#9aa0ad;margin:0 0 16px}
+input,button{width:100%;box-sizing:border-box;min-height:50px;border-radius:12px;font-size:16px}
+input{background:#0b0c10;color:#f2f3f5;border:1px solid #2a2d37;padding:0 14px;margin-bottom:10px}
+button{border:0;color:#fff;font-weight:600;background:linear-gradient(90deg,#ff3b5c,#ff7a45)}
+.err{color:#ffb3c0}</style></head><body><form method="get" action="/">
+<h1>🎵 Tune Grabber</h1><p>Enter the passcode from the person who shared this link.</p>{message}
+<input name="code" autocomplete="off" autocapitalize="off" placeholder="Passcode" autofocus>
+<button>Open</button></form></body></html>"""
+
+
+@app.before_request
+def guest_passcode():
+    """The shared copy asks for the passcode (it's built into the link the owner sends)."""
+    if not GUEST or not PASSCODE or session.get("ok"):
+        return None
+    if request.path.startswith("/static/") or request.path == "/manifest.webmanifest":
+        return None
+    code = request.args.get("code", "")
+    if code and hmac.compare_digest(code, PASSCODE):
+        session["ok"] = True
+        return redirect("/")
+    if request.path.startswith("/api/"):
+        return jsonify(error="Enter the passcode first."), 401
+    wrong = '<p class="err">That passcode isn\'t right.</p>' if code else ""
+    return PASSCODE_PAGE.replace("{message}", wrong), 401
 
 
 @app.get("/")
@@ -346,6 +454,8 @@ def config():
         music_app=can_script_music(),
         js_solver=js_solver_ready(),
         lan_url=lan_url(),
+        guest=GUEST,
+        songs_place="iCloud Drive › Tune Grabber" if SONGS_IN_ICLOUD else None,
     )
 
 
@@ -403,10 +513,12 @@ def convert():
 
     job_id = uuid.uuid4().hex
     with jobs_lock:
+        if GUEST and sum(j.get("status") == "working" for j in jobs.values()) >= 2:
+            return jsonify(error="Two songs are already converting. Wait for one to finish, then try again."), 429
         jobs[job_id] = {"status": "working", "stage": "Starting", "progress": 0}
     threading.Thread(
         target=run_conversion,
-        args=(job_id, url, bitrate, bool(body.get("add_to_music")), body.get("square_cover", True) is not False,
+        args=(job_id, url, bitrate, bool(body.get("add_to_music")) and not GUEST, body.get("square_cover", True) is not False,
               body.get("browser")),
         daemon=True,
     ).start()
@@ -428,12 +540,15 @@ def file(job_id):
     track = load_track(folder) if folder else None
     if not track:
         return jsonify(error="File not ready"), 404
-    return send_file(folder / track["filename"], as_attachment=True,
+    meta = json.loads((folder / "track.json").read_text())
+    return send_file(mp3_path(folder, meta), as_attachment=True,
                      download_name=track["filename"], mimetype="audio/mpeg")
 
 
 @app.post("/api/music/<job_id>")
 def add_to_music(job_id):
+    if GUEST:
+        return jsonify(error="Adding to Apple Music isn't available in the shared version."), 403
     folder = job_dir_for(job_id)
     if not folder or not load_track(folder):
         return jsonify(error="That song isn't available any more."), 404
@@ -446,8 +561,10 @@ def add_to_music(job_id):
 @app.post("/api/music-all")
 def add_all_to_music():
     """Send every downloaded song to Apple Music; songs already in the library are skipped."""
+    if GUEST:
+        return jsonify(error="Adding to Apple Music isn't available in the shared version."), 403
     added = present = 0
-    for folder in sorted(d for d in DOWNLOAD_DIR.iterdir() if d.is_dir()):
+    for folder in sorted(d for d in DATA_DIR.iterdir() if d.is_dir()):
         if not load_track(folder):
             continue
         ok, note = send_to_music(folder, force=False) if can_script_music() else (True, "")
@@ -470,15 +587,20 @@ def cover(job_id):
 
 @app.get("/api/library")
 def library():
-    tracks = [t for d in DOWNLOAD_DIR.iterdir() if d.is_dir() for t in [load_track(d)] if t]
+    tracks = [t for d in DATA_DIR.iterdir() if d.is_dir() for t in [load_track(d)] if t]
     tracks.sort(key=lambda t: t["created"] or 0, reverse=True)
     return jsonify(tracks=tracks)
 
 
 if __name__ == "__main__":
+    moved = migrate_old_downloads()
+    if moved:
+        print(f"\n  Moved {moved} earlier song{'s' * (moved != 1)} into iCloud Drive › Tune Grabber.")
     phone = lan_url()
-    print(f"\n  Tune Grabber is running!")
+    print(f"\n  Tune Grabber is running{' (shared guest copy)' if GUEST else ''}!")
     print(f"    On this computer:  http://localhost:{PORT}")
+    if SONGS_IN_ICLOUD:
+        print(f"    Songs are saved in: iCloud Drive › Tune Grabber")
     if phone:
         print(f"    On your iPhone:    {phone}   (same Wi-Fi, open in Safari)")
     print()
